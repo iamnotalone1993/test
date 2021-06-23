@@ -1,0 +1,4 @@
+/home/diepda/Working Directory/test/cmake_study/build/CMakeFiles/rebuild_cache.dir
+/home/diepda/Working Directory/test/cmake_study/build/CMakeFiles/edit_cache.dir
+/home/diepda/Working Directory/test/cmake_study/build/CMakeFiles/hello.dir
+/home/diepda/Working Directory/test/cmake_study/build/CMakeFiles/archive.dir

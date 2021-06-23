@@ -1,0 +1,2 @@
+/usr/bin/ar qc libarchive.a CMakeFiles/archive.dir/lib/factorial.cpp.o
+/usr/bin/ranlib libarchive.a
