@@ -24,6 +24,4 @@ unset KMP_AFFINITY
 export OMP_NUM_THREADS=28
 export OMP_PROC_BIND="close"
 export OMP_PLACES="cores"
-export OMP_DISPLAY_ENV="true"
-export OMP_DISPLAY_AFFINITY="true"
 $gaspirun -n $SLURM_NTASKS ./out/program
