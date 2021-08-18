@@ -1,0 +1,54 @@
+[0]GASPI_version = 1.5
+PROPOSED configuration
+group_max = 32
+segment_max = 255
+queue_num = 8
+queue_size_max = 1024
+transfer_size_max = 1073741824
+notification_num = 65536
+passive_queue_size_max = 1024
+passive_transfer_size_max = 65535
+allreduce_buf_size = 2040
+allreduce_elem_max = 255
+network = 0
+build_infrastructure = 1
+ACTUAL configuration
+group_max = 32
+segment_max = 255
+queue_num = 8
+queue_size_max = 1024
+queue_max = 16
+transfer_size_max = 1073741824
+notification_num = 65536
+passive_transfer_size_max = 65535
+max_value = 18446744073709551615
+buf_size = 2040
+elem_max = 255
+network_type = 0
+[1]GASPI_version = 1.5
+PROPOSED configuration
+group_max = 32
+segment_max = 255
+queue_num = 8
+queue_size_max = 1024
+transfer_size_max = 1073741824
+notification_num = 65536
+passive_queue_size_max = 1024
+passive_transfer_size_max = 65535
+allreduce_buf_size = 2040
+allreduce_elem_max = 255
+network = 0
+build_infrastructure = 1
+ACTUAL configuration
+group_max = 32
+segment_max = 255
+queue_num = 8
+queue_size_max = 1024
+queue_max = 16
+transfer_size_max = 1073741824
+notification_num = 65536
+passive_transfer_size_max = 65535
+max_value = 18446744073709551615
+buf_size = 2040
+elem_max = 255
+network_type = 0

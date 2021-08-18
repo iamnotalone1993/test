@@ -1,5 +1,5 @@
 # The input file of your program
-IN = l7_hello_world
+IN = my_test_configuration
 
 # The output file of your program
 OUT = program
