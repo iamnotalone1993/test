@@ -26,12 +26,13 @@ public:
 	void lock()
 	{
 		node* my_pred = tail.exchange(my_node);
-		if (my_pred == nullptr)
+		if (my_pred != nullptr)
 		{
 			my_node->locked = true;
 			my_pred->next = my_node;
 			// wait until predecessor gives up the lock
 			while (my_node->locked);
+		}
 	}
 
 	void unlock()

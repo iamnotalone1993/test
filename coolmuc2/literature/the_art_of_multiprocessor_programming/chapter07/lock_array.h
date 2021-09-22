@@ -5,7 +5,7 @@ class lock_array()
 public:
 	lock_array(const int& capacity)
 	{
-		slot = 0;
+		slot = -1;
 		size = capacity;
 		tail = 0;
 		flag = new std::atomic<bool>[capacity];
