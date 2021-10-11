@@ -1,0 +1,6 @@
+*********************************************************
+*	BENCHMARK	:	Sequential-alternating	*
+*	NUM_UNITS	:	768			*
+*	NUM_OPS		:	2048 (ops/unit)	*
+*	WORKLOAD	:	1 (us)			*
+*	STACK		:	EBS_NA			*

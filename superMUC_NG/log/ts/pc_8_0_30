@@ -1,0 +1,6 @@
+*********************************************************
+*	BENCHMARK	:	Producer-consumer	*
+*	NUM_UNITS	:	384			*
+*	NUM_OPS		:	4096 (ops/unit)	*
+*	WORKLOAD	:	1 (us)			*
+*	STACK		:	TS			*
