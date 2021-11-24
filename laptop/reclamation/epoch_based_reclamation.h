@@ -50,7 +50,7 @@ void mem_manager::register_thread(const int& num)
 
 void mem_manager::unregister_thread()
 {
-	/* no-op */
+	delete self;
 }
 
 void mem_manager::op_begin()

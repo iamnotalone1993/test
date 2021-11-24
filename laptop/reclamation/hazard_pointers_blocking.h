@@ -1,6 +1,5 @@
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
-#include <cstdint>	// uint64_t...
 
 class thread_context;
 
@@ -8,7 +7,7 @@ class mem_manager
 {
 public:
 	std::atomic<thread_context*> head;
-	
+
 	void register_thread(const int& num);	// called once, before any call to op_begin()
 						// num indicates the maximum number of
 						// locations the caller can reserve
@@ -24,7 +23,7 @@ public:
 private:
 	thread_local static thread_context *self;
 
-	void wait_until_unreserved();
+	void wait_until_unreserved(void* ptr);
 };
 thread_local thread_context *mem_manager::self = nullptr;
 
@@ -32,11 +31,15 @@ class thread_context
 {
 public:
 	std::vector<void*>	pending_reclaims;
-	std::atomic<uint64_t>	counter;
+	std::atomic<void*>	*reservations;
 	thread_context		*next;
+	const int		num;
 
-	thread_context(mem_manager *m) : counter{0}
+	thread_context(const int& _num, mem_manager *m) : num{_num}
 	{
+		reservations = new std::atomic<void*>[num];
+		for (int i = 0; i < num; ++i)
+			reservations[i] = nullptr;
 		do {
 			next = m->head.load();
 		} while (!m->head.compare_exchange_weak(next, this));
@@ -45,38 +48,52 @@ public:
 
 void mem_manager::register_thread(const int& num)
 {
-	self = new thread_context(this);
+	self = new thread_context(num, this);
 }
 
 void mem_manager::unregister_thread()
 {
-	/* no-op */
+	delete self;
 }
 
 void mem_manager::op_begin()
 {
-	++self->counter;
+	/* no-op */
 }
 
 void mem_manager::op_end()
 {
-	++self->counter;
-	if (self->pending_reclaims.size() == 0)
-		return;
-	wait_until_unreserved();
+	for (int i = 0; i < self->num; ++i)
+		self->reservations[i].store(nullptr);
 	for (auto p : self->pending_reclaims)
+	{
+		wait_until_unreserved(p);
 		delete (int*)p;
+	}
 	self->pending_reclaims.clear();
 }
 
 bool mem_manager::try_reserve(void* ptr)
 {
+	for (int i = 0; i < self->num; ++i)
+	{
+		if (self->reservations[i] == nullptr)
+		{
+			self->reservations[i].store(ptr);
+			return true;
+		}	
+	}
 	return false;
 }
 
 void mem_manager::unreserve(void* ptr)
 {
-	/* no-op */
+	for (int i = 0; i < self->num; ++i)
+		if (self->reservations[i] == ptr)
+		{
+			self->reservations[i].store(nullptr);
+			return;
+		}
 }
 
 void mem_manager::sched_for_reclaim(void* ptr)
@@ -84,14 +101,9 @@ void mem_manager::sched_for_reclaim(void* ptr)
 	self->pending_reclaims.push_back(ptr);
 }	
 
-void mem_manager::wait_until_unreserved()
+void mem_manager::wait_until_unreserved(void* ptr)
 {
-	uint64_t val;
 	for (auto curr = head.load(); curr != nullptr; curr = curr->next)
-	{
-		val = curr->counter;
-		if (val % 2 != 0)
-			while (curr->counter.load() == val);
-	}
+		for (int i = 0; i < curr->num; ++i)
+			while (curr->reservations[i] == ptr);
 }
-
