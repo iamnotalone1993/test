@@ -1,3 +1,6 @@
+#ifndef EBR3_H
+#define EBR3_H
+
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
 #include <cstdint>	// uint64_t...
@@ -9,9 +12,11 @@ class mem_manager
 public:
 	std::atomic<thread_context*> head;
 	
-	void register_thread(const int& num);	// called once, before any call to op_begin()
-						// num indicates the maximum number of
-						// locations the caller can reserve
+	mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq) {};
+	~mem_manager() {};
+	void register_thread(const uint64_t&	num_threads,	// called once, before any call to op_begin()
+				const uint64_t& tid,		// num indicates the maximum number of
+				const int&	num);		// locations the caller can reserve
 	void unregister_thread();	// called once, after the last call to op_end()
 
 	void op_begin();	// indicate the beginning of a concurrent operation
@@ -43,7 +48,9 @@ public:
 	}
 };
 
-void mem_manager::register_thread(const int& num)
+void mem_manager::register_thread(const uint64_t&	num_threads,
+				const uint64_t&		tid,
+				const int&		num)
 {
 	self = new thread_context(this);
 }
@@ -95,3 +102,4 @@ void mem_manager::wait_until_unreserved()
 	}
 }
 
+#endif // EBR3_H

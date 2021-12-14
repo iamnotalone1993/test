@@ -8,7 +8,7 @@
 
 class thread_context;
 
-struct elem
+struct block
 {
 	void		*ptr;
 	uint64_t	retired_epoch;
@@ -29,7 +29,7 @@ public:
 
 	bool try_reserve(void* ptr);	// try to protect a pointer from reclamation
 	void unreserve(void* ptr);	// stop protecting a pointer
-	void sched_for_reclaim(void* ptr);	// try to reclaim a pointer
+	void sched_for_reclaim(void *ptr);	// try to reclaim a pointer
 
 private:
 	thread_local static thread_context 	*self;
@@ -48,7 +48,7 @@ public:
 	uint64_t		num_threads;
 	uint64_t		tid;
 	uint64_t		counter;
-	std::vector<elem*>	retired;
+	std::vector<block*>	retired;
 
 	thread_context(const uint64_t& num_threads, const uint64_t& tid, mem_manager *m)
 		: num_threads{num_threads}, tid{tid}, counter{0} {}
@@ -94,9 +94,9 @@ void mem_manager::unreserve(void* ptr)
 	/* no-op */
 }
 
-void mem_manager::sched_for_reclaim(void* ptr)
+void mem_manager::sched_for_reclaim(void *ptr)
 {
-	elem *tmp = new elem;
+	block *tmp = new block;
 	self->retired.push_back(tmp);
 	tmp->ptr = ptr;
 	tmp->retired_epoch = epoch.load();	// one RMA
@@ -119,6 +119,7 @@ void mem_manager::empty()
 		if (self->retired[i]->retired_epoch < max_safe_epoch)
 		{
 			delete (uint64_t*)(self->retired[i]->ptr);
+			delete (block*)(self->retired[i]);
 			self->retired.erase(self->retired.begin() + i);
 		}
 }
