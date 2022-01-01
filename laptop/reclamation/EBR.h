@@ -26,9 +26,11 @@ public:
 	void sched_for_reclaim(void* ptr);	// try to reclaim a pointer
 
 private:
+	const uint64_t				MAX = std::numeric_limits<uint64_t>::max();
+
 	thread_local static thread_context 	*self;
 	std::atomic<uint64_t>			epoch;
-	uint64_t				*reservations;
+	std::atomic<uint64_t>			*reservations;
 	uint64_t				epoch_freq;	// freg. of increasing epoch
 	// uint64_t				empty_freq;	// freg. of reclaiming retired
 };
@@ -48,7 +50,11 @@ public:
 };
 
 mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq)
-	: epoch{0}, reservations{new uint64_t[num_threads]}, epoch_freq{epoch_freq} {}
+	: epoch{1}, reservations{new std::atomic<uint64_t>[num_threads]}, epoch_freq{epoch_freq}
+{
+	for (uint64_t i = 0; i < num_threads; ++i)
+		reservations[i] = MAX;
+}
 
 mem_manager::~mem_manager()
 {
@@ -69,41 +75,57 @@ void mem_manager::unregister_thread()
 
 void mem_manager::op_begin()
 {
-	uint64_t old = reservations[self->tid];
-	reservations[self->tid] = epoch.load();	// one RMA
+	// observe the current global epoch
+	uint64_t timestamp = epoch.load();	// one RMA
 
-	if (old != reservations[self->tid])
+	if (self->curr != timestamp)
 	{
-		self->curr = (self->curr + 1) % 3;
+		// synchronize with the current global epoch
+		reservations[self->tid] = self->curr = timestamp;
+
+		// reset the local counter
 		self->counter = 0;
 	}
-	else // if (old == reservations[self->tid])
+	else // if (self->curr == timestamp)
 	{
+		// increment the local counter
 		++self->counter;
+
+		/* check if the global epoch has not changed for some pre-determined
+		 * number of nonblocking operations (self->counter) */
 		if (self->counter % epoch_freq == 0)
 		{
-			uint64_t tmp;
-			int last = true;
-			for (int i = 0; i < self->num_threads; ++i)
+			/* determine if all processes currently executing within some
+			 * nonblocking operation have seen the current global epoch */
+			uint64_t	tmp;
+			bool		seen = true;
+			for (uint64_t i = 0; i < self->num_threads; ++i)
 			{
-				tmp = reservations[i];	// many RMAs
-				if (tmp != std::numeric_limits<uint64_t>::max()
-							&& tmp < reservations[self->tid])
+				tmp = reservations[i].load();	// one RMA
+				if (tmp != MAX && tmp != timestamp)
 				{
-					last = false;
+					seen = false;
 					break;
 				}
 			}
-			if (last)
+
+			// if yes
+			if (seen)
 			{
-				self->curr = (self->curr + 1) % 3;
+				// reclaim the oldest retire list
 				while (!self->retired[self->curr].empty())
 				{
 					delete (int*)self->retired[self->curr].back();
 					self->retired[self->curr].pop_back();
 				}
-				epoch.fetch_add(1);	// one RMA
-				++reservations[self->tid];
+
+				// attempt to increment the global epoch
+				uint64_t timestamp_new = timestamp % 3 + 1;
+				epoch.compare_exchange_strong(timestamp, timestamp_new);	// one RMA
+
+				// synchronize with the current global epoch
+				self->curr = self->curr % 3 + 1;
+				reservations[self->tid] = self->curr;
 			}
 		}
 	}
@@ -111,12 +133,12 @@ void mem_manager::op_begin()
 
 void mem_manager::op_end()
 {
-	reservations[self->tid] = std::numeric_limits<uint64_t>::max();
+	reservations[self->tid] = MAX;
 }
 
 bool mem_manager::try_reserve(void* ptr)
 {
-	return false;
+	return true;
 }
 
 void mem_manager::unreserve(void* ptr)
@@ -126,7 +148,7 @@ void mem_manager::unreserve(void* ptr)
 
 void mem_manager::sched_for_reclaim(void* ptr)
 {
-	self->retired[self->curr].push_back(ptr);
+	self->retired[self->curr - 1].push_back(ptr);
 }	
 
 #endif // EBR_H
