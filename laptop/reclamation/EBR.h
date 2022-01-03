@@ -11,7 +11,7 @@ class thread_context;
 class mem_manager
 {
 public:	
-	mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq);
+	mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq);
 	~mem_manager();
 	void register_thread(const uint64_t&	num_threads,	// called once, before any call to op_begin()
 				const uint64_t&	tid,		// num indicates the maximum number of
@@ -21,8 +21,8 @@ public:
 	void op_begin();	// indicate the beginning of a concurrent operation
 	void op_end();		// indicate the end of a concurrent operation
 
-	bool try_reserve(void* ptr);	// try to protect a pointer from reclamation
-	void unreserve(void* ptr);	// stop protecting a pointer
+	bool try_reserve(void* ptr, void* comp);// try to protect a pointer from reclamation
+	void unreserve(void* ptr);		// stop protecting a pointer
 	void sched_for_reclaim(void* ptr);	// try to reclaim a pointer
 
 private:
@@ -39,19 +39,20 @@ thread_local thread_context *mem_manager::self = nullptr;
 class thread_context
 {
 public:
-	uint64_t		num_threads;
-	uint64_t		tid;
+	const uint64_t		NUM_THREADS;
+	const uint64_t		TID;
 	uint64_t		counter;
-	uint64_t		curr;
+	uint32_t		curr;
 	std::vector<void*>	retired[3];
 
 	thread_context(const uint64_t& num_threads, const uint64_t& tid, mem_manager *m)
-		: num_threads{num_threads}, tid{tid}, counter{0}, curr{0} {}
+		: NUM_THREADS{num_threads}, TID{tid}, counter{0}, curr{0} {}
 };
 
-mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq)
-	: epoch{1}, reservations{new std::atomic<uint64_t>[num_threads]}, epoch_freq{epoch_freq}
+mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq)
+	: epoch{1}, epoch_freq{epoch_freq}
 {
+	reservations = new std::atomic<uint64_t>[num_threads];
 	for (uint64_t i = 0; i < num_threads; ++i)
 		reservations[i] = MAX;
 }
@@ -81,7 +82,7 @@ void mem_manager::op_begin()
 	if (self->curr != timestamp)
 	{
 		// synchronize with the current global epoch
-		reservations[self->tid] = self->curr = timestamp;
+		reservations[self->TID] = self->curr = timestamp;
 
 		// reset the local counter
 		self->counter = 0;
@@ -99,7 +100,7 @@ void mem_manager::op_begin()
 			 * nonblocking operation have seen the current global epoch */
 			uint64_t	tmp;
 			bool		seen = true;
-			for (uint64_t i = 0; i < self->num_threads; ++i)
+			for (uint64_t i = 0; i < self->NUM_THREADS; ++i)
 			{
 				tmp = reservations[i].load();	// one RMA
 				if (tmp != MAX && tmp != timestamp)
@@ -111,12 +112,13 @@ void mem_manager::op_begin()
 
 			// if yes
 			if (seen)
-			{
+			{				
 				// reclaim the oldest retire list
-				while (!self->retired[self->curr].empty())
+				uint32_t curr = self->curr % 3;
+				while (!self->retired[curr].empty())
 				{
-					delete (int*)self->retired[self->curr].back();
-					self->retired[self->curr].pop_back();
+					delete (int*)self->retired[curr].back();
+					self->retired[curr].pop_back();
 				}
 
 				// attempt to increment the global epoch
@@ -125,7 +127,7 @@ void mem_manager::op_begin()
 
 				// synchronize with the current global epoch
 				self->curr = self->curr % 3 + 1;
-				reservations[self->tid] = self->curr;
+				reservations[self->TID] = self->curr;
 			}
 		}
 	}
@@ -133,10 +135,10 @@ void mem_manager::op_begin()
 
 void mem_manager::op_end()
 {
-	reservations[self->tid] = MAX;
+	reservations[self->TID] = MAX;
 }
 
-bool mem_manager::try_reserve(void* ptr)
+bool mem_manager::try_reserve(void* ptr, void* comp)
 {
 	return true;
 }

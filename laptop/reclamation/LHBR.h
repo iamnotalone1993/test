@@ -16,7 +16,7 @@ class mem_manager
 public:
 	tree_abs tree;
 
-	mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq);
+	mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq);
 	~mem_manager();
 	void register_thread(const uint64_t& 	num_threads,	// called once, before any call to op_begin()
 				const uint64_t& tid,		// num indicates the maximum number of
@@ -26,9 +26,10 @@ public:
 	void op_begin();	// indicate the beginning of a concurrent operation
 	void op_end();		// indicate the end of a concurrent operation
 
-	bool try_reserve(void* ptr);	// try to protect a pointer from reclamation
-	void unreserve(void* ptr);	// stop protecting a pointer
-	void sched_for_reclaim(void* ptr);	// try to reclaim a pointer
+	bool try_reserve(void*			ptr,	// try to protect a pointer from reclamation
+			std::atomic<void*>	comp);
+	void unreserve(void* ptr);			// stop protecting a pointer
+	void sched_for_reclaim(void* ptr);		// try to reclaim a pointer
 
 private:
 	thread_local static thread_context 	*self;
@@ -47,7 +48,7 @@ public:
 		: counter{0}, history(num_threads, tid, m->tree) {}
 };
 
-mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& epoch_freq)
+mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq)
 	: epoch_freq{epoch_freq} {}
 
 mem_manager::~mem_manager()
@@ -77,9 +78,9 @@ void mem_manager::op_end()
 	/* no-op */
 }
 
-bool mem_manager::try_reserve(void* ptr)
+bool mem_manager::try_reserve(void* ptr, std::atomic<void*> comp)
 {
-	return false;
+	return true;
 }
 
 void mem_manager::unreserve(void* ptr)

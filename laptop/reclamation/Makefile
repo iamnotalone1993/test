@@ -20,7 +20,7 @@ $(OUT) : $(IN).cpp
 
 #Run your program
 run : $(OUT)
-	for i in `seq 1`; do ./$(OUT); done
+	for i in `seq 100`; do ./$(OUT); done
 
 #Remove your executable
 clean :

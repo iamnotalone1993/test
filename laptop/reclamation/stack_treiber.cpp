@@ -1,15 +1,16 @@
-#include <iostream>			// std::cout...
-#include <thread>			// std::thread...
-#include <atomic>			// std::atomic...
-#include <cassert>			// assert...
-#include "EBR.h"			// mem_manager...
+#include <cstdint>	// uint64_t...
+#include <iostream>	// std::cout...
+#include <thread>	// std::thread...
+#include <atomic>	// std::atomic...
+#include <cassert>	// assert...
+#include "EBR3.h"	// mem_manager...
 
 /* Shared constants */
-const int       NUM_OF_THREADS  = std::thread::hardware_concurrency();
-//const int       NUM_OF_THREADS  = 5;
+//const int       NUM_OF_THREADS  = std::thread::hardware_concurrency();
+const int       NUM_OF_THREADS  = 2;
 const int       NUM_OF_PAIRS    = 100000; // push & pop pairs
 
-mem_manager	mm(NUM_OF_THREADS, 1);
+mem_manager	mm(NUM_OF_THREADS, 1, 1);
 
 template <typename T>
 struct node 
@@ -27,8 +28,8 @@ class stack
 public:
 	stack();
 	~stack();
-	bool push(const T& value);
-	bool pop(T &value);
+	bool push(const uint64_t& TID, const T& value);
+	bool pop(const uint64_t& TID, T &value);
 	void print();
 	void test();
 
@@ -44,7 +45,7 @@ template<typename T>
 stack<T>::~stack() {}
 
 template<typename T>
-bool stack<T>::push(const T& value)
+bool stack<T>::push(const uint64_t& TID, const T& value)
 {
 	node<T> *top_old, *top_new;
 	top_new = new node<T>(value);
@@ -56,26 +57,43 @@ bool stack<T>::push(const T& value)
 }
 
 template<typename T>
-bool stack<T>::pop(T& value)
+bool stack<T>::pop(const uint64_t& TID, T& value)
 {
 	mm.op_begin();
-	node<T> *top_old, *top_new, *hp = nullptr;
-	do {
-		top_old = top.load();
+
+	node<T> *top_old, *top_new, *hp;
+
+	while (true)
+	{
+		hp = top_old = top.load();
+
 		if (top_old == nullptr)
 		{
-			mm.unreserve(hp);
 			mm.op_end();
+
 			return false;
 		}
-		hp = top_old;
-		mm.try_reserve(hp);
+
+		if (!mm.try_reserve(top_old, std::atomic<void*>(top)))
+			continue;
+
 		top_new = top_old->next;
-	} while (!top.compare_exchange_weak(top_old, top_new));
-	mm.unreserve(hp);
+		
+		if (top.compare_exchange_weak(top_old, top_new))
+		{
+			mm.unreserve(top_old);
+
+			break;
+		}
+		else // if (!top.compare_exchange_weak(top_old, top_new))
+			mm.unreserve(hp);
+	}
+
 	value = top_old->value;
-	mm.sched_for_reclaim(hp);
+
+	mm.sched_for_reclaim(top_old);
 	mm.op_end();
+
 	return true;
 }
 
@@ -101,7 +119,7 @@ stack<int>	my_stack;
 // thread_local int tid;
 
 /* Child thread's code */
-inline void thread_entry(int tid)
+inline void thread_entry(uint64_t tid)
 {
 	//printf("[%d]Hello World!\n", tid);
 	int value;
@@ -111,8 +129,8 @@ inline void thread_entry(int tid)
 	// Sequential Alternating
 	for (auto i = 0; i < NUM_OF_PAIRS; ++i)
 	{
-		my_stack.push(i);
-		my_stack.pop(value);
+		my_stack.push(tid, i);
+		my_stack.pop(tid, value);
 	}
 
 	mm.unregister_thread();
@@ -124,12 +142,12 @@ int main()
 	std::thread 	threads[NUM_OF_THREADS];
 
 	// The main thread forks
-	for (auto i = 0; i < NUM_OF_THREADS; ++i)
-		threads[i] = std::thread(thread_entry, i);
+	for (uint64_t tid = 0; tid < NUM_OF_THREADS; ++tid)
+		threads[tid] = std::thread(thread_entry, tid);
 
 	// The child threads join
-	for (auto i = 0; i < NUM_OF_THREADS; ++i)
-		threads[i].join();
+	for (uint64_t tid = 0; tid < NUM_OF_THREADS; ++tid)
+		threads[tid].join();
 
 	// Print the stack
 	my_stack.print();
