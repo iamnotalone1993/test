@@ -107,11 +107,9 @@ void local_history::update(std::vector<void *> *retired)
 		}
 		if (curr == 0)
 		{
-			while (!retired[count].empty())
-			{
-				delete (int*)retired[count].back();
-				retired[count].pop_back();
-			}
+			for (auto &ptr : retired[count])
+				delete (int*)ptr;
+			retired[count].clear();
 			++count;
 		}
 		last = is_last();

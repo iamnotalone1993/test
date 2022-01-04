@@ -74,7 +74,7 @@ void mem_manager::op_end()
 	if (self->pending_reclaims.size() == 0)
 		return;
 	wait_until_unreserved();
-	for (auto p : self->pending_reclaims)
+	for (auto &p : self->pending_reclaims)
 		delete (int*)p;
 	self->pending_reclaims.clear();
 }
