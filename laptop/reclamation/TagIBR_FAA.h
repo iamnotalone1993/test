@@ -1,5 +1,5 @@
-#ifndef TAGIBR_H
-#define	TAGIBR_H
+#ifndef TAGIBR_FAA_H
+#define	TAGIBR_FAA_H
 
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
@@ -12,9 +12,10 @@ class thread_context;
 template<typename T>
 struct block
 {
-	T		elem;
-	uint32_t	birth_epoch;
-	uint32_t	retire_epoch;
+	T			elem;
+	std::atomic<uint32_t>	born_before;	// monotonically increasing
+	uint32_t		birth_epoch;
+	uint32_t		retire_epoch;
 };
 
 struct reservation
@@ -27,27 +28,20 @@ template<typename T>
 class TPointer
 {
 public:
-	std::atomic<uint32_t>	born_before;	// nonotonically increasing
 	std::atomic<block<T>*>	p;
 
 	bool protected_CAS(block *ori, block *ptr)
 	{
-		uint32_t ori_bb;
-		do {
-			ori_bb = born_before.load();	// one RMA
-			if (ptr->birth_epoch <= ori_bb)
-				break;
-		} while (!born_before.compare_exchange_weak(ori_bb, ptr->birth_epoch));	// one RMA
+		uint32_t ori_bb = born_before.load();	// one RMA
+		if (ptr->birth_epoch > ori_bb)
+			born_before.fetch_add(ptr->birth_epoch - ori_bb);	// one RMA
 		return p.compare_exchange_strong(ori, ptr);	// one RMA
 	}
 	void protected_write(block *ptr)
 	{
-		uint32_t ori_bb;
-		do {
-			ori_bb = born_before.load();	// one RMA
-			if (ptr->birth_epoch <= ori_bb)
-				break;
-		} while (!born_before.compare_exchange_weak(ori_bb, ptr->birth_epoch));	// one RMA
+		uint32_t ori_bb = born_before.load();	// one RMA
+		if (ptr->birth_epoch > ori_bb)
+			born_before.fetch_add(ptr->birth_epoch - ori_bb);	// one RMA
 		p.store(ptr);	// one RMA
 	}
 };
@@ -71,7 +65,6 @@ public:
 	bool try_reserve(TPointer<T> ptr);			// try to protect a pointer from reclamation
 	void unreserve(void* ptr);				// stop protecting a pointer
 	void sched_for_reclaim(block *ptr);			// try to reclaim a pointer
-	block* read(TPointer *ptraddr);
 
 private:
 	thread_local static thread_context<T> 	*self;
@@ -242,4 +235,4 @@ void mem_manager<T>::free(block<T>*& ptr)
 	/* No-op */
 }
 
-#endif // TAGIBR_H
+#endif // TAGIBR_FAA_H

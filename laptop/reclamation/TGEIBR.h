@@ -1,5 +1,5 @@
-#ifndef TAGIBR_H
-#define	TAGIBR_H
+#ifndef TGEIBR_H
+#define	TGEIBR_H
 
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
@@ -24,59 +24,31 @@ struct reservation
 };
 
 template<typename T>
-class TPointer
-{
-public:
-	std::atomic<uint32_t>	born_before;	// nonotonically increasing
-	std::atomic<block<T>*>	p;
-
-	bool protected_CAS(block *ori, block *ptr)
-	{
-		uint32_t ori_bb;
-		do {
-			ori_bb = born_before.load();	// one RMA
-			if (ptr->birth_epoch <= ori_bb)
-				break;
-		} while (!born_before.compare_exchange_weak(ori_bb, ptr->birth_epoch));	// one RMA
-		return p.compare_exchange_strong(ori, ptr);	// one RMA
-	}
-	void protected_write(block *ptr)
-	{
-		uint32_t ori_bb;
-		do {
-			ori_bb = born_before.load();	// one RMA
-			if (ptr->birth_epoch <= ori_bb)
-				break;
-		} while (!born_before.compare_exchange_weak(ori_bb, ptr->birth_epoch));	// one RMA
-		p.store(ptr);	// one RMA
-	}
-};
-
-template<typename T>
 class mem_manager
 {
 public:
+	std::atomic<reservation>	*reservations;
+
 	mem_manager(const uint64_t&	num_threads,
 			const uint32_t&	num_hps,
 			const uint64_t& epoch_freq);
 	~mem_manager();
-	block<T>* malloc();
-	void free(block<T>*& ptr);
+	T* malloc();
+	void free(T*& ptr);
 	void register_thread(const uint64_t&	num_threads,	// called once, before any call to op_begin()
 				const uint64_t&	tid,		// num indicates the maximum number of
 				const uint32_t& num_hps);	// locations the caller can reserve
 	void unregister_thread();				// called once, after the last call to op_end()
 	void op_begin();					// indicate the beginning of a concurrent operation
 	void op_end();						// indicate the end of a concurrent operation
-	bool try_reserve(TPointer<T> ptr);			// try to protect a pointer from reclamation
-	void unreserve(void* ptr);				// stop protecting a pointer
-	void sched_for_reclaim(block *ptr);			// try to reclaim a pointer
-	block* read(TPointer *ptraddr);
+	bool try_reserve(T*&			ptr,		// try to protect a pointer from reclamation
+			const std::atomic<T*>&	comp);
+	void unreserve(T* ptr);					// stop protecting a pointer
+	void sched_for_reclaim(T* ptr);				// try to reclaim a pointer
 
 private:
 	thread_local static thread_context<T> 	*self;
 	std::atomic<uint32_t>			epoch;
-	std::atomic<reservation>		*reservations;
 	uint64_t				epoch_freq;     // freg. of increasing epoch
 	uint64_t				empty_freq;     // freg. of reclaiming retired
 
@@ -122,6 +94,23 @@ mem_manager<T>::~mem_manager()
 }
 
 template<typename T>
+T* mem_manager<T>::malloc()
+{
+	++self->counter;
+	if (self->counter % epoch_freq == 0)
+		epoch.fetch_add(1);	// one RMA
+	block<T> *b = new block<T>;
+	b->birth_epoch = epoch.load();	// one RMA
+	return reinterpret_cast<T*>(b);
+}
+
+template<typename T>
+void mem_manager<T>::free(T*& ptr)
+{
+	/* No-op */
+}
+
+template<typename T>
 void mem_manager<T>::register_thread(const uint64_t&	num_threads,
 					const uint64_t&	tid,
 					const uint32_t& num_hps)
@@ -150,52 +139,36 @@ void mem_manager<T>::op_end()
 }
 
 template<typename T>
-block<T>* mem_manager<T>::read(TPointer<T> *ptraddr)
+bool mem_manager<T>::try_reserve(T*&			ptr,
+				const std::atomic<T*>&	comp)
 {
-	block<T> 	*ret;
-	reservation 	res;
-	uint32_t	tmp;
+	uint32_t ts, lower, upper;
 	while (true)
 	{
-		ret = ptraddr->p;
-		res = reservations[self->TID];
-		tmp = ptraddr->born_before.load();	// one RMA
-		if (reservations[self->TID].upper >= tmp)
-			return ret;
-		else // if (reservations[self->tid].upper < tmp)
-			reservations[self->TID].upper = tmp;
+		ptr = comp.load();	// one RMA
+		ts = epoch.load();	// one RMA
+		lower = reservations[self->TID].load().lower;
+		upper = reservations[self->TID].load().upper;
+		if (upper < ts)
+			reservations[self->TID] = {lower, ts};
+		if (upper == epoch.load())	// one RMA
+			return true;
 	}
+	return false;
 }
 
 template<typename T>
-void write(TPointer<T> *target_ptraddr, block<T> *ptr)
-{
-	return target_ptraddr->protected_write(ptr);
-}
-
-template<typename T>
-bool CAS(TPointer<T> *target_ptraddr, block<T> *ori, block<T> *new_ptr)
-{
-	return target_ptraddr->protected_CAS(ori, new_ptr);
-}
-
-template<typename T>
-bool mem_manager<T>::try_reserve(block<T>* ptr)
-{
-	return true;
-}
-
-template<typename T>
-void mem_manager<T>::unreserve(block<T>* ptr)
+void mem_manager<T>::unreserve(T* ptr)
 {
 	/* No-op */
 }
 
 template<typename T>
-void mem_manager<T>::sched_for_reclaim(block<T> *ptr)
+void mem_manager<T>::sched_for_reclaim(T* ptr)
 {
-	self->retired.push_back(ptr);
-	ptr->retire_epoch = epoch.load();	// one RMA
+	block<T>* pblock = reinterpret_cast<block<T>*>(ptr);
+	self->retired.push_back(pblock);
+	pblock->retire_epoch = epoch.load();	// one RMA
 	if (self->retired.size() % empty_freq == 0)
 		empty();
 }	
@@ -208,38 +181,21 @@ void mem_manager<T>::empty()
 	for (int i = 0; i < self->retired.size(); ++i)
 	{
 		conflict = false;
-		for (int j = 0; j < self->num_threads; ++j)	// many RMAs
+		for (int j = 0; j < self->NUM_THREADS; ++j)
 		{
 		/* block protected if some epoch reserved
 		   by some thread is in its interval */
-			res = reservations[i].load();
+			res = reservations[j].load();	// one RMA
 			if (self->retired[i]->birth_epoch <= res.upper &
 				self->retired[i]->retire_epoch >= res.lower)
 				conflict = true;
 		}
 		if (!conflict)
 		{
-			delete (block*)self->retired[i];
+			delete self->retired[i];
 			self->retired.erase(self->retired.begin() + i);
 		}
 	}
 }
 
-template<typename T>
-block<T>* mem_manager<T>::malloc()
-{
-	++self->counter;
-	if (self->counter % epoch_freq == 0)
-		epoch.fetch_add(1);	// one RMA
-	block<T> *b = new block<T>;
-	b->birth_epoch = epoch.load();	// one RMA
-	return b;
-}
-
-template<typename T>
-void mem_manager<T>::free(block<T>*& ptr)
-{
-	/* No-op */
-}
-
-#endif // TAGIBR_H
+#endif // TGEIBR_H

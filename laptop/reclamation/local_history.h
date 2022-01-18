@@ -12,14 +12,17 @@ struct subepoch
 	uint64_t	value;	// its value
 };
 
+template<typename T>
 class local_history
 {
 public:
 	uint32_t				count;		// its count
 
-	local_history(const uint64_t& num_threads, const uint64_t& tid, const tree_abs& tree);
+	local_history(const uint64_t& 	num_threads,
+			const uint64_t& tid,
+			const tree_abs& tree);
 	~local_history();
-	void update(std::vector<void *> *retired);
+	void update(std::vector<T*> *retired);
 
 private:
 	std::vector<std::atomic<uint64_t> *>	gepoch;		// its view of global epoch
@@ -31,7 +34,8 @@ private:
 	bool is_last();
 };
 
-local_history::local_history(	const uint64_t& 	num_threads,
+template<typename T>
+local_history<T>::local_history(	const uint64_t& 	num_threads,
 				const uint64_t& 	tid,
 				const tree_abs& 	tree)
 		: LEVEL{tree.height},
@@ -80,12 +84,14 @@ local_history::local_history(	const uint64_t& 	num_threads,
 	}
 }
 
-local_history::~local_history()
+template<typename T>
+local_history<T>::~local_history()
 {
 	delete[] lepoch;
 }
 
-void local_history::update(std::vector<void *> *retired)
+template<typename T>
+void local_history<T>::update(std::vector<T*> *retired)
 {
 	if (last)
 	{
@@ -130,7 +136,8 @@ void local_history::update(std::vector<void *> *retired)
 	}
 }
 
-bool local_history::is_last()
+template<typename T>
+bool local_history<T>::is_last()
 {
 	if (lepoch[curr].value == lepoch[curr].seq[count-1])
 	{

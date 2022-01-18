@@ -3,22 +3,18 @@
 #include <thread>	// std::thread...
 #include <atomic>	// std::atomic...
 #include <cassert>	// assert...
-#include "EBR.h"	// mem_manager...
+#include <iostream>	// std::cout...
+#include "TGEIBR.h"	// mem_manager...
 
 /* Shared constants */
-const int       NUM_OF_THREADS  = std::thread::hardware_concurrency();
-//const int       NUM_OF_THREADS  = 4;
-const int       NUM_OF_PAIRS    = 100000; // push & pop pairs
-
-mem_manager	mm(NUM_OF_THREADS, 1, 1);
+const uint64_t	NUM_OF_THREADS  = std::thread::hardware_concurrency();
+const uint64_t	NUM_OF_PAIRS    = 10000; // push & pop pairs
 
 template <typename T>
 struct node 
 {
-	T		value;
 	node<T>		*next;
-
-	node(const T& value) : value{value}, next{nullptr} {}
+	T		value;
 };
 
 /* Stack's Interface */
@@ -26,6 +22,8 @@ template<typename T>
 class stack
 {
 public:
+	mem_manager<node<T>>	mm{NUM_OF_THREADS, 1, 1};
+
 	stack();
 	~stack();
 	bool push(const uint64_t& TID, const T& value);
@@ -48,7 +46,11 @@ template<typename T>
 bool stack<T>::push(const uint64_t& TID, const T& value)
 {
 	node<T> *top_old, *top_new;
-	top_new = new node<T>(value);
+	top_new = mm.malloc();
+	if (top_new == nullptr)
+		return false;
+	else // if (top_new != nullptr)
+		*top_new = {nullptr, value};
 	do {
 		top_old = top.load();
 		top_new->next = top_old;
@@ -61,11 +63,12 @@ bool stack<T>::pop(const uint64_t& TID, T& value)
 {
 	mm.op_begin();
 
-	node<T> *top_old, *top_new, *hp;
+	node<T> *top_old, *top_old2, *top_new;
 
 	while (true)
 	{
-		hp = top_old = top.load();
+		if (!mm.try_reserve(top_old, top))
+			std::cout << "ERROR" << std::endl;
 
 		if (top_old == nullptr)
 		{
@@ -74,11 +77,9 @@ bool stack<T>::pop(const uint64_t& TID, T& value)
 			return false;
 		}
 
-		if (!mm.try_reserve(top_old, std::atomic<void*>(top)))
-			continue;
-
 		top_new = top_old->next;
 		
+		top_old2 = top_old;
 		if (top.compare_exchange_weak(top_old, top_new))
 		{
 			mm.unreserve(top_old);
@@ -86,7 +87,7 @@ bool stack<T>::pop(const uint64_t& TID, T& value)
 			break;
 		}
 		else // if (!top.compare_exchange_weak(top_old, top_new))
-			mm.unreserve(hp);
+			mm.unreserve(top_old2);
 	}
 
 	value = top_old->value;
@@ -124,7 +125,7 @@ inline void thread_entry(uint64_t tid)
 	//printf("[%d]Hello World!\n", tid);
 	int value;
 
-	mm.register_thread(NUM_OF_THREADS, tid, 1);
+	my_stack.mm.register_thread(NUM_OF_THREADS, tid, 1);
 
 	// Sequential Alternating
 	for (auto i = 0; i < NUM_OF_PAIRS; ++i)
@@ -133,7 +134,7 @@ inline void thread_entry(uint64_t tid)
 		my_stack.pop(tid, value);
 	}
 
-	mm.unregister_thread();
+	my_stack.mm.unregister_thread();
 }
 
 /* Main thread's code */

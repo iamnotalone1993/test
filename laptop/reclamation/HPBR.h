@@ -4,111 +4,149 @@
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
 
+template<typename T>
 class thread_context;
 
+template<typename T>
 class mem_manager
 {
 public:
-	std::atomic<void*> 	**reservations;
+	std::atomic<T*> 	**reservations;
 
 	mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq);
 	~mem_manager();
 	void register_thread(const uint64_t&	num_threads,	// called once, before any call to op_begin()
 				const uint64_t& tid,		// num indicates the maximum number of
-				const int&	num);		// locations the caller can reserve
-	void unregister_thread();	// called once, after the last call to op_end()
-
-	void op_begin();	// indicate the beginning of a concurrent operation
-	void op_end();		// indicate the end of a concurrent operation
-
-	bool try_reserve(void*			ptr,	// try to protect a pointer from reclamation
-			std::atomic<void*>	comp);
-	void unreserve(void* ptr);			// stop protecting a pointer
-	void sched_for_reclaim(void* ptr);		// try to reclaim a pointer
+				const int&	num_hps);	// locations the caller can reserve
+	void unregister_thread();				// called once, after the last call to op_end()
+	T* malloc();
+	void free(T*& ptr);
+	void op_begin();					// indicate the beginning of a concurrent operation
+	void op_end();						// indicate the end of a concurrent operation
+	bool try_reserve(T*&			ptr,		// try to protect a pointer from reclamation
+			const std::atomic<T*>&	comp);
+	void unreserve(T* ptr);					// stop protecting a pointer
+	void sched_for_reclaim(T* ptr);				// try to reclaim a pointer
 
 private:
 	const uint64_t				NUM_THREADS;
-	thread_local static thread_context 	*self;
+	thread_local static thread_context<T> 	*self;
 
-	void wait_until_unreserved(void* ptr);
+	void wait_until_unreserved(T* ptr);
 };
-thread_local thread_context *mem_manager::self = nullptr;
 
+template<typename T>
+thread_local thread_context<T> *mem_manager<T>::self = nullptr;
+
+template<typename T>
 class thread_context
 {
 public:
 	const uint64_t		NUM_THREADS;
 	const uint64_t		TID;
 	const uint32_t		NUM_HPS;
-	std::vector<void*>	pending_reclaims;
-	std::atomic<void*>	*reservations;
-	thread_context		*next;
+	std::vector<T*>		pending_reclaims;
+	std::atomic<T*>		*reservations;
 
-	thread_context(const uint64_t& num_threads, const uint64_t& tid, const uint32_t& num, mem_manager *m)
-		: NUM_THREADS{num_threads}, TID{tid}, NUM_HPS{num}, reservations{m->reservations[tid]} {}
+	thread_context(const uint64_t& 	num_threads,
+			const uint64_t& tid,
+			const uint32_t& num_hps,
+			mem_manager<T> 	*m)
+		: NUM_THREADS{num_threads},
+		TID{tid}, 
+		NUM_HPS{num_hps},
+		reservations{m->reservations[tid]} {}
 };
 
-mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq)
+template<typename T>
+mem_manager<T>::mem_manager(const uint64_t& 	num_threads,
+				const uint64_t& num_hps,
+				const uint64_t& epoch_freq)
 	: NUM_THREADS{num_threads}
 {
-	reservations = new std::atomic<void*>*[num_threads];
+	reservations = new std::atomic<T*>*[num_threads];
 	for (uint64_t i = 0; i < num_threads; ++i)
 	{
-		reservations[i] = new std::atomic<void*>[num_hps];
+		reservations[i] = new std::atomic<T*>[num_hps];
 		for (uint32_t j = 0; j < num_hps; ++j)
 			reservations[i][j] = nullptr;
 	}
 }
 
-mem_manager::~mem_manager()
+template<typename T>
+mem_manager<T>::~mem_manager()
 {
 	for (uint64_t i = 0; i < NUM_THREADS; ++i)
 		delete[] reservations[i];
 	delete[] reservations;
 }
 
-void mem_manager::register_thread(const uint64_t&	num_threads,
-				const uint64_t&		tid,
-				const int&		num_hps)
+template<typename T>
+void mem_manager<T>::register_thread(const uint64_t&	num_threads,
+					const uint64_t&	tid,
+					const int&	num_hps)
 {
 	self = new thread_context(num_threads, tid, num_hps, this);
 }
 
-void mem_manager::unregister_thread()
+template<typename T>
+void mem_manager<T>::unregister_thread()
 {
-	delete self;
+	/* No-op */
 }
 
-void mem_manager::op_begin()
+template<typename T>
+T* mem_manager<T>::malloc()
 {
-	/* no-op */
+	return new T;
 }
 
-void mem_manager::op_end()
+template<typename T>
+void mem_manager<T>::free(T*& ptr)
 {
-	for (auto &p : self->pending_reclaims)
+	delete ptr;
+	ptr = nullptr;
+}
+
+template<typename T>
+void mem_manager<T>::op_begin()
+{
+	/* No-op */
+}
+
+template<typename T>
+void mem_manager<T>::op_end()
+{
+	for (auto& ptr : self->pending_reclaims)
 	{
-		wait_until_unreserved(p);
-		delete (int*)p;
+		wait_until_unreserved(ptr);
+		free(ptr);
 	}
 	self->pending_reclaims.clear();
 }
 
-bool mem_manager::try_reserve(void* ptr, std::atomic<void*> comp)
+template<typename T>
+bool mem_manager<T>::try_reserve(T*& ptr, const std::atomic<T*>& comp)
 {
 	for (uint32_t i = 0; i < self->NUM_HPS; ++i)
 		if (self->reservations[i] == nullptr)
 		{
-			self->reservations[i] = ptr;
-			if (ptr == comp.load())
-				return true;
-			self->reservations[i] = nullptr;
-			return false;
+			T* ptr_curr;
+			ptr = comp.load();	// one RMA
+			while (true)
+			{
+				self->reservations[i] = ptr;
+				ptr_curr = comp.load();	// one RMA
+				if (ptr_curr == ptr)
+					return true;
+				ptr = ptr_curr;
+			}
 		}
 	return false;
 }
 
-void mem_manager::unreserve(void* ptr)
+template<typename T>
+void mem_manager<T>::unreserve(T* ptr)
 {
 	for (uint32_t i = 0; i < self->NUM_HPS; ++i)
 		if (self->reservations[i] == ptr)
@@ -118,12 +156,14 @@ void mem_manager::unreserve(void* ptr)
 		}
 }
 
-void mem_manager::sched_for_reclaim(void* ptr)
+template<typename T>
+void mem_manager<T>::sched_for_reclaim(T* ptr)
 {
 	self->pending_reclaims.push_back(ptr);
 }	
 
-void mem_manager::wait_until_unreserved(void* ptr)
+template<typename T>
+void mem_manager<T>::wait_until_unreserved(T* ptr)
 {
 	for (uint64_t i = 0; i < self->NUM_THREADS; ++i)
 		for (uint32_t j = 0; j < self->NUM_HPS; ++j)

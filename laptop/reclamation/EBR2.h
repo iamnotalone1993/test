@@ -6,33 +6,40 @@
 #include <cstdint>	// uint64_t...
 #include <limits>	// std::numerics_limits...
 
+template<typename T>
 class thread_context;
 
+template<typename T>
 struct block
 {
-	void		*ptr;
+	T		*ptr;
 	uint64_t	retired_epoch;
 };
 
+template<typename T>
 class mem_manager
 {
 public:
-	mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq);
+	mem_manager(const uint64_t&	num_threads,
+			const uint32_t& num_hps,
+			const uint64_t& epoch_freq);
 	~mem_manager();
 	void register_thread(const uint64_t&	num_threads,	// called once, before any call to op_begin()
 				const uint64_t&	tid,		// num indicates the maximum number of
-				const int& 	num);		// locations the caller can reserve
-	void unregister_thread();	// called once, after the last call to op_end()
+				const uint32_t& num_hps);	// locations the caller can reserve
+	void unregister_thread();				// called once, after the last call to op_end()
+	T* malloc();
+	void free(T*& ptr);
+	void op_begin();					// indicate the beginning of a concurrent operation
+	void op_end();						// indicate the end of a concurrent operation
 
-	void op_begin();	// indicate the beginning of a concurrent operation
-	void op_end();		// indicate the end of a concurrent operation
-
-	bool try_reserve(void* ptr, void* comp);// try to protect a pointer from reclamation
-	void unreserve(void* ptr);		// stop protecting a pointer
-	void sched_for_reclaim(void *ptr);	// try to reclaim a pointer
+	bool try_reserve(T*&			ptr,		// try to protect a pointer from reclamation
+			const std::atomic<T*>& 	comp);
+	void unreserve(T* ptr);					// stop protecting a pointer
+	void sched_for_reclaim(T *ptr);				// try to reclaim a pointer
 
 private:
-	thread_local static thread_context 	*self;
+	thread_local static thread_context<T> 	*self;
 	std::atomic<uint64_t>			epoch;
 	uint64_t				*reservations;
 	uint64_t				epoch_freq;     // freg. of increasing epoch
@@ -40,63 +47,94 @@ private:
 
 	void empty();
 };
-thread_local thread_context *mem_manager::self = nullptr;
 
+template<typename T>
+thread_local thread_context<T> *mem_manager<T>::self = nullptr;
+
+template<typename T>
 class thread_context
 {
 public:
 	const uint64_t		NUM_THREADS;
 	const uint64_t		TID;
 	uint64_t		counter;
-	std::vector<block*>	retired;
+	std::vector<block<T>*>	retired;
 
-	thread_context(const uint64_t& num_threads, const uint64_t& tid, mem_manager *m)
+	thread_context(const uint64_t&	num_threads,
+			const uint64_t& tid,
+			mem_manager<T> 	*m)
 		: NUM_THREADS{num_threads}, TID{tid}, counter{0} {}
 };
 
-mem_manager::mem_manager(const uint64_t& num_threads, const uint64_t& num_hps, const uint64_t& epoch_freq)
-	: epoch{0}, reservations{new uint64_t[num_threads]}, epoch_freq{epoch_freq}, empty_freq{1} {}
+template<typename T>
+mem_manager<T>::mem_manager(const uint64_t& 	num_threads,
+				const uint32_t& num_hps,
+				const uint64_t& epoch_freq)
+	: epoch{0},
+	reservations{new uint64_t[num_threads]},
+	epoch_freq{epoch_freq},
+	empty_freq{1} {}
 
-mem_manager::~mem_manager()
+template<typename T>
+mem_manager<T>::~mem_manager()
 {
 	delete[] reservations;
 }
 
-void mem_manager::register_thread(const uint64_t&	num_threads,
-				const uint64_t&		tid,
-				const int& 		num)
+template<typename T>
+void mem_manager<T>::register_thread(const uint64_t&	num_threads,
+					const uint64_t&	tid,
+					const uint32_t& num_hps)
 {
 	self = new thread_context(num_threads, tid, this);
 }
 
-void mem_manager::unregister_thread()
+template<typename T>
+void mem_manager<T>::unregister_thread()
 {
-	delete self;
+	/* No-op */
 }
 
-void mem_manager::op_begin()
+template<typename T>
+T* mem_manager<T>::malloc()
+{
+	return new T;
+}
+
+template<typename T>
+void mem_manager<T>::free(T*& ptr)
+{
+	/* No-op */
+}
+
+template<typename T>
+void mem_manager<T>::op_begin()
 {
 	reservations[self->TID] = epoch.load();	// one RMA
 }
 
-void mem_manager::op_end()
+template<typename T>
+void mem_manager<T>::op_end()
 {
 	reservations[self->TID] = std::numeric_limits<uint64_t>::max();
 }
 
-bool mem_manager::try_reserve(void* ptr, void* comp)
+template<typename T>
+bool mem_manager<T>::try_reserve(T*& ptr, const std::atomic<T*>& comp)
 {
 	return true;
 }
 
-void mem_manager::unreserve(void* ptr)
+template<typename T>
+void mem_manager<T>::unreserve(T* ptr)
 {
 	/* no-op */
 }
 
-void mem_manager::sched_for_reclaim(void *ptr)
+template<typename T>
+void mem_manager<T>::sched_for_reclaim(T* ptr)
 {
-	block *tmp = new block;
+	block<T> *tmp = new block<T>;
 	self->retired.push_back(tmp);
 	tmp->ptr = ptr;
 	tmp->retired_epoch = epoch.load();	// one RMA
@@ -107,7 +145,8 @@ void mem_manager::sched_for_reclaim(void *ptr)
 		empty();
 }	
 
-void mem_manager::empty()
+template<typename T>
+void mem_manager<T>::empty()
 {
 	uint64_t max_safe_epoch = reservations[0];
 	for (int i = 1; i < self->NUM_THREADS; ++i)
@@ -118,8 +157,8 @@ void mem_manager::empty()
 		   max_safe_epoch will be protected */
 		if (self->retired[i]->retired_epoch < max_safe_epoch)
 		{
-			delete (uint64_t*)(self->retired[i]->ptr);
-			delete (block*)(self->retired[i]);
+			delete self->retired[i]->ptr;
+			delete self->retired[i];
 			self->retired.erase(self->retired.begin() + i);
 		}
 }
