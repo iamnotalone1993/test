@@ -4,6 +4,7 @@
 #include <vector>	// std::vector...
 #include <atomic>	// std::atomic...
 #include <cstdint>	// uint64_t...
+#include <utility>	// std::pair...
 
 template<typename T>
 class thread_context;
@@ -52,13 +53,13 @@ template<typename T>
 class thread_context
 {
 public:
-	const uint64_t		NUM_THREADS;
-	const uint64_t		TID;
-	const uint32_t		NUM_HPS;
-	const uint64_t		NONE;
-	uint32_t		index;
-	std::vector<block<T>*>	pending_reclaims;
-	std::atomic<uint64_t>	*reservations;
+	const uint64_t				NUM_THREADS;
+	const uint64_t				TID;
+	const uint32_t				NUM_HPS;
+	const uint64_t				NONE;
+	std::vector<block<T>*>			pending_reclaims;
+	std::atomic<uint64_t>			*reservations;
+	std::vector<std::pair<T*, uint32_t>>	dictionary;
 
 	thread_context(const uint64_t&	num_threads,
 			const uint64_t& tid,
@@ -68,7 +69,6 @@ public:
 		TID{tid},
 		NUM_HPS{num_hps},
 		NONE{0},
-		index{0},
 		reservations{m->reservations[tid]} {}
 };
 
@@ -132,37 +132,45 @@ void mem_manager<T>::op_begin()
 template<typename T>
 void mem_manager<T>::op_end()
 {
-	for (uint32_t i = 0; i < self->NUM_HPS; ++i)
-		self->reservations[i] = NONE;
-	self->index = 0;
+	/* No-op */
 }
 
 template<typename T>
 bool mem_manager<T>::try_reserve(T*& ptr, const std::atomic<T*>& comp)
 {
-	uint64_t	era_prev = self->reservations[self->index],
-			era_curr;
-	if (self->index < self->NUM_HPS)
-		while (true)
+	uint64_t era_prev, era_curr;
+	for (uint32_t i = 0; i < self->NUM_HPS; ++i)
+	{
+		if (self->reservations[i] == NONE)
 		{
-			ptr = comp.load();	// one RMA	
-			era_curr = epoch.load();// one RMA
-			if (era_curr == era_prev)
+			era_prev = self->reservations[i] = epoch.load();	// one RMA
+			while (true)
 			{
-				++self->index;
-				return true;
+				ptr = comp.load();	// one RMA	
+				era_curr = epoch.load();// one RMA
+				if (era_curr == era_prev)
+				{
+					self->dictionary.push_back(std::make_pair(ptr, i));
+					return true;
+				}
+				self->reservations[i] = era_curr;
+				era_prev = era_curr;	
 			}
-			self->reservations[self->index] = era_curr;
-			era_prev = era_curr;	
 		}
+	}
+	printf("HE:Error\n");
 	return false;
 }
 
 template<typename T>
 void mem_manager<T>::unreserve(T* ptr)
 {
-	self->reservations[self->index] = NONE;
-	--self->index;
+	for (uint32_t i = 0; i < self->dictionary.size(); ++i)
+		if (self->dictionary[i].first == ptr)
+		{
+			self->reservations[self->dictionary[i].second] = NONE;
+			return;
+		}
 }
 
 template<typename T>
