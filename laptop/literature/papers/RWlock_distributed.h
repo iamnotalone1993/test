@@ -1,1 +1,0 @@
-void write-acquire<i>
