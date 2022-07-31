@@ -1,5 +1,5 @@
 # The input file of your program
-IN = hello_world
+IN = rput_sync
 
 # The output file of your program
 OUT = program
@@ -10,14 +10,8 @@ DIR_IN = ./examples
 # The path of output files
 DIR_OUT = ./out
 
-# The path of GASPI's header files
-# DIR_INC = /dss/dsshome1/lxc0B/ra56kom/gaspi/local/include
-
-# The path of GASPI's library files
-# DIR_LIB = /dss/dsshome1/lxc0B/ra56kom/gaspi/local/lib64
-
 # Compiler
-CC = mpiicc
+CC = mpic++
 
 # The performance flags for the compiler
 FLAGS = -std=gnu++17 -O3
